@@ -1,5 +1,5 @@
-import { task } from "@nomiclabs/buidler/config";
-import { BuidlerRuntimeEnvironment } from "@nomiclabs/buidler/types";
+import { task } from "hardhat/config";
+import { HardhatRuntimeEnvironment } from "hardhat/types";
 
 import { eContractid, eEthereumNetwork } from "../../helpers/types";
 import {
@@ -8,47 +8,79 @@ import {
 } from "../../helpers/constants";
 import { checkVerification } from "../../helpers/etherscan-verification";
 
-task("testnet-deployment", "Deployment in mainnet network")
+// Defines a comprehensive task for deploying and initializing the Aave Token and Migrator contracts.
+task("deploy:aave-migration", "Deploys and initializes Aave Token and LendMigrator contracts.")
   .addFlag(
     "verify",
-    "Verify AaveToken, LendToAaveMigrator, and InitializableAdminUpgradeabilityProxy contract."
+    "Verify AaveToken and LendToAaveMigrator contracts on Etherscan."
   )
-  .setAction(async ({ verify }, localBRE) => {
-    const BRE: BuidlerRuntimeEnvironment = await localBRE.run("set-bre");
+  .addParam(
+    "admin",
+    "The address of the Aave Admin used for contract initialization.",
+    "", // Default value is empty string, which forces usage of the constant lookup
+  )
+  .setAction(async ({ verify, admin }, localBRE) => {
+    // 1. Setup Environment
+    // Run an internal task to set up the environment, if necessary (e.g., setting up accounts).
+    const BRE: HardhatRuntimeEnvironment = await localBRE.run("set-bre");
     const network = BRE.network.name as eEthereumNetwork;
-    const aaveAdmin = getAaveAdminPerNetwork(network);
+
+    // Retrieve addresses from helper constants or use the provided parameter.
+    let aaveAdmin = admin;
+    if (!aaveAdmin) {
+        aaveAdmin = getAaveAdminPerNetwork(network);
+    }
+    
     const lendTokenAddress = getLendTokenPerNetwork(network);
 
     if (!aaveAdmin) {
+      // Throw an error if the admin address is still missing for the target network.
       throw Error(
-        "The --admin parameter must be set for mainnet network. Set an Ethereum address as --admin parameter input."
+        `The Aave Admin address is missing for network ${network}. Please set it via the --admin parameter.`
       );
     }
 
-    // If Etherscan verification is enabled, check needed enviroments to prevent loss of gas in failed deployments.
+    // 2. Pre-Deployment Checks
+    // Check if Etherscan credentials are set before deploying to prevent gas loss on failed verification.
     if (verify) {
       checkVerification();
     }
 
-    console.log("AAVE ADMIN", aaveAdmin);
+    console.log(`\n--- Starting AAVE Token Migration Deployment on ${network} ---`);
+    console.log("AAVE ADMIN:", aaveAdmin);
+    console.log("LEND TOKEN:", lendTokenAddress);
+
+    // 3. Deployment Phase
+    
+    // Deploy Aave Token (Implementation + Proxy)
+    console.log(`\nDeploying ${eContractid.AaveToken}...`);
     await BRE.run(`deploy-${eContractid.AaveToken}`, { verify });
 
+    // Deploy LendToAaveMigrator (Implementation + Proxy)
+    console.log(`\nDeploying ${eContractid.LendToAaveMigrator}...`);
     await BRE.run(`deploy-${eContractid.LendToAaveMigrator}`, {
       lendTokenAddress,
       verify,
     });
 
+    // 4. Initialization Phase (via Proxy)
+    
+    // Initialize the AaveToken Proxy
+    console.log(`\nInitializing ${eContractid.AaveToken} via proxy...`);
     await BRE.run(`initialize-${eContractid.AaveToken}`, {
       admin: aaveAdmin,
-      onlyProxy: true,
+      onlyProxy: true, // Custom flag to indicate only proxy initialization
     });
 
+    // Initialize the LendToAaveMigrator Proxy
+    console.log(`Initializing ${eContractid.LendToAaveMigrator} via proxy...`);
     await BRE.run(`initialize-${eContractid.LendToAaveMigrator}`, {
       admin: aaveAdmin,
-      onlyProxy: true,
+      onlyProxy: true, // Custom flag to indicate only proxy initialization
     });
 
+    // 5. Completion
     console.log(
-      "\n✔️  Finished the deployment of the Aave Token Testnet Enviroment. ✔️"
+      "\n✔️ Finished the deployment and initialization of Aave Token Migration components. ✔️"
     );
   });
